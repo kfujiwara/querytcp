@@ -159,8 +159,8 @@ struct queries {
 	} send;
 	u_char recvbuf[RECVBUFSIZ];
 	int sendlen;
-	int sent_flag:1;
-	int tcpstate:2;
+	int sent_flag;
+	int tcpstate;
 	int fd;
 	int rpos;
 	int wpos;
@@ -188,7 +188,7 @@ int recursion = 0;
 FILE *fp = NULL;
 int datafileloop = 0;
 int verbose = 0;
-int nQueries = 1000;
+int nQueries = 120;
 int printrcode = 1;
 char *rcodestr[]= {
 	"NOERROR", "FormatError", "ServerFailure", "NameError",
