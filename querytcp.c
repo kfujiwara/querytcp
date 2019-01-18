@@ -189,6 +189,7 @@ int datafileloop = 0;
 int verbose = 0;
 int nQueries = 120;
 int printrcode = 1;
+int reuse_session = 0;
 char *rcodestr[]= {
 	"NOERROR", "FormatError", "ServerFailure", "NameError",
 	"NotImplemented", "Reused", "RCODE06", "RCODE07",
@@ -219,6 +220,11 @@ uint64_t countrecverror = 0;
 uint64_t countsocketerror = 0;
 uint64_t counttimeout = 0;
 uint64_t counterror = 0;
+uint64_t count_socket = 0;
+uint64_t count_send = 0;
+uint64_t count_read = 0;
+uint64_t count_close = 0;
+uint64_t count_select = 0;
 
 int response_size_min = 0;
 int response_size_max = 0;
@@ -327,6 +333,12 @@ void output()
 			}
 		}
 	}
+	printf("nfds=%d\n", nfds);
+	printf("count_socket=%lu\n", count_socket);
+	printf("count_close=%lu\n", count_close);
+	printf("count_send=%lu\n", count_send);
+	printf("count_read=%lu\n", count_read);
+	printf("count_select=%lu\n", count_select);
 }
 
 void tcp_close(struct queries *q)
@@ -336,6 +348,7 @@ printf("tcp_close no=%d fd=%d\n", q->no, q->fd);
 #endif
 	if (q->fd >= 0) {
 		close(q->fd);
+		count_close++;
 		FD_CLR(q->fd, &fdset0r);
 		FD_CLR(q->fd, &fdset0w);
 	}
@@ -348,6 +361,7 @@ void tcp_send(struct queries *q)
 	int len;
 
 	len = send(q->fd, &q->send, q->sendlen, MSG_NOSIGNAL);
+	count_send++;
 #ifdef DEBUG
 printf("tcp_send no=%d fd=%d %d:%d:%d\n", q->no, q->fd, len, q->wpos, q->sendlen);
 #endif
@@ -356,12 +370,12 @@ printf("tcp_send no=%d fd=%d %d:%d:%d\n", q->no, q->fd, len, q->wpos, q->sendlen
 printf("tcp_send no=%d fd=%d ENOTCONN return\n", q->no, q->fd);
 			return;
 		}
-		register_response(q, SENDERROR, "tcp_send");
+		register_response(q, SENDERROR, "tcp_send1");
 		tcp_close(q);
 		return;
 	}
 	if (len != q->sendlen) {
-		register_response(q, SENDERROR, "tcp_send:sendto");
+		register_response(q, SENDERROR, "tcp_send:send2");
 		tcp_close(q);
 		return;
 	}
@@ -529,12 +543,15 @@ void send_query(struct queries *q)
 		int id = ntohs(*(unsigned short *)&q->send.dnsdata);
 		printf("sending query(%s,%d,%d) id=%d %d bytes to %s\n", qname, qclass, qtype, id, q->sendlen, ServerName);
 	}
-	if (q->fd > 0)
+	if (q->fd > 0 && reuse_session == 0)
 		err(1, "q->fd > 0 but ignored\n");
-	if ((q->fd = socket(remote.ss_family, SOCK_STREAM, 0)) < 0
+	if (q->fd <= 0 &&
+		(
+           count_socket++ < 0
+		|| (q->fd = socket(remote.ss_family, SOCK_STREAM, 0)) < 0
 		|| (tmp = fcntl(q->fd, F_GETFL, 0)) == -1
 	    || fcntl(q->fd, F_SETFL, O_NONBLOCK | tmp) == -1
-	    || (connect(q->fd, (struct sockaddr *)&remote, remote_len) < 0 && errno != EINPROGRESS)) { 
+	    || (connect(q->fd, (struct sockaddr *)&remote, remote_len) < 0 && errno != EINPROGRESS))) { 
 		register_response(q, SOCKETERROR, "send_query:socket+fcntl+connect");
 		tcp_close(q);
 		return;
@@ -605,6 +622,7 @@ void tcp_receive(struct queries *q)
 /*printf("tcp_receive %s\n", q->nameserverlabel);*/
 
 	len = read(q->fd, q->recvbuf + q->rpos, len2 = RECVBUFSIZ - q->rpos);
+	count_read++;
 	if (len < 0) {
 		if (errno == EAGAIN)
 			return;
@@ -635,7 +653,11 @@ void tcp_receive(struct queries *q)
 			}
 			tmp = timediff(&current, &q->sent);
 			register_response(q, tmp, "tcp_receive");
-			tcp_close(q);
+			if (reuse_session) {
+				q->state = State_None;
+			} else {
+				tcp_close(q);
+			}
 			return;
 		} else {
 printf("no=%d fd=%d unknown recv %d bytes, len=%d\n", q->no, q->fd, q->rpos, ntohs(*(unsigned short *)(q->recvbuf)));
@@ -696,6 +718,7 @@ void query()
 		fdsetr = fdset0r;
 		fdsetw = fdset0w;
 		n = select(nfds, &fdsetr, &fdsetw, NULL, &timeout);
+		count_select++;
 		UpdateCurrentTime;
 		for(i = 0; i < nQueries; i++) {
 			q = &Queries[i];
@@ -723,6 +746,7 @@ void usage()
 "  -e enable EDNS0\n"
 "  -D set DO bit\n"
 "  -r set RD bit\n"
+"  -R Reuse TCP session\n"
 "\n"
 "\n"
 "\n"
@@ -737,7 +761,7 @@ int main(int argc, char *argv[])
 {
 	int ch, i;
 
-	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46eDrvh")) != -1) {
+	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46eDrvhR")) != -1) {
 	switch (ch) {
 	case 'q':
 		nQueries = atoi(optarg);
@@ -784,6 +808,9 @@ int main(int argc, char *argv[])
 		break;
 	case 'c':
 		printrcode = 1;
+		break;
+	case 'R':
+		reuse_session = 1;
 		break;
 	case 'h':
 	default:
