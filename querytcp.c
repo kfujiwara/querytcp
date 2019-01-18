@@ -24,6 +24,8 @@ o changes
   2012/10/16: fixed a typo, EDNS0 works.
 */
 
+#define FD_SETSIZE 16384
+
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,7 +173,7 @@ struct queries {
 
 struct queries *Queries;
 
-#define	NQUERY 100
+#define	NQUERY 16384
 
 #define	TCP_NONE	0
 #define	TCP_WRITABLE	1
@@ -189,7 +191,7 @@ int recursion = 0;
 FILE *fp = NULL;
 int datafileloop = 0;
 int verbose = 0;
-int nQueries = 120;
+int nQueries = 1000;
 int printrcode = 0;
 char *rcodestr[]= {
 	"NOERROR", "FormatError", "ServerFailure", "NameError",
@@ -315,7 +317,7 @@ void tcp_send(struct queries *q)
 {
 	int len;
 
-	len = send(q->fd, &q->send, q->sendlen, 0);
+	len = send(q->fd, &q->send, q->sendlen, MSG_NOSIGNAL);
 #ifdef DEBUG
 printf("tcp_send no=%d fd=%d %d:%d:%d\n", q->no, q->fd, len, q->wpos, q->sendlen);
 #endif
