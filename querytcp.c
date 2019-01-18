@@ -154,13 +154,10 @@ struct dnsheader  {
 	
 struct queries {
 	struct tcpdns {
-		unsigned short len;
-		union {
-			struct dnsheader h;
-			unsigned char dnsdata[SENDBUFSIZ];
-		} u;
+		u_short len;
+		u_char dnsdata[SENDBUFSIZ];
 	} send;
-	unsigned char recvbuf[RECVBUFSIZ];
+	u_char recvbuf[RECVBUFSIZ];
 	int sendlen;
 	int sent_flag:1;
 	int tcpstate:2;
@@ -192,7 +189,7 @@ FILE *fp = NULL;
 int datafileloop = 0;
 int verbose = 0;
 int nQueries = 1000;
-int printrcode = 0;
+int printrcode = 1;
 char *rcodestr[]= {
 	"NOERROR", "FormatError", "ServerFailure", "NameError",
 	"NotImplemented", "Reused", "RCODE06", "RCODE07",
@@ -205,16 +202,22 @@ timediff_t timediff(struct timeval *a, struct timeval *b) /* u sec */
 	return (a->tv_sec - b->tv_sec) * 1000000 + (a->tv_usec - b->tv_usec);
 }
 
-#define	TIMEOUTERROR	-10000
-#define	ERROROFFSET	-20000
-#define	ERRZEROREAD	-30000
+#define	TIMEOUTERROR	-1
+#define	SENDERROR	-2
+#define	RECVERROR	-3
+#define	SOCKETERROR	-4
+#define	ERRZEROREAD	-5
 
 uint64_t countrcode[16];
+uint64_t counterrno[100];
 uint64_t response_size_sum = 0;
 uint64_t response_size_sum2 = 0;
 uint64_t countanswers = 0;
 uint64_t countqueries = 0;
 uint64_t countzeroread = 0;
+uint64_t countsenderror = 0;
+uint64_t countrecverror = 0;
+uint64_t countsocketerror = 0;
 uint64_t counttimeout = 0;
 uint64_t counterror = 0;
 
@@ -229,37 +232,54 @@ void register_response(struct queries *q, int timeout, char *note)
 	int size;
 	int rcode;
 	int id;
+	struct dnsheader *h;
 
-	id = ntohs(&q->send.u.h.id);
+	h = (struct dnsheader *)q->send.dnsdata;
+	id = ntohs(h->id);
 	if (note == NULL)
 		note = "";
 	countqueries++;
-	if (timeout >= 0) {
-		p = q->recvbuf;
-		NS_GET16(size, p);
-		response_size_sum += size;
-		response_size_sum2 += size * size;
-		if (response_size_min == 0 || response_size_min > size)
-			response_size_min = size;
-		if (response_size_max == 0 || response_size_max < size)
-			response_size_max = size;
-		rcode = p[3] & 0x0f;
-		countrcode[rcode]++;
-		countanswers++;
-		if (verbose)
-			printf("recv response id=%d rcode=%d size=%d rtt=%d\n", id, rcode, size, timeout);
-	} else if (timeout == ERRZEROREAD) {
+	if (timeout < 0) {
+		if (errno >= 0 && errno < 100)
+			counterrno[errno]++;
+	}
+	switch (timeout) {
+	case ERRZEROREAD:
 		countzeroread++;
 		if (verbose)
 			printf("recv response id=%d zeroread\n", id);
-	} else if (timeout == TIMEOUTERROR) {
+		break;
+	case SOCKETERROR:
+		countsocketerror++;
+		break;
+	case TIMEOUTERROR:
 		counttimeout++;
 		if (verbose)
-			printf("recv timeout id=%d %lld usec\n", id, timediff(&current, &q->sent));
-	} else {
-		counterror++;
-		if (verbose)
-			printf("recv error id=%d errno=%d at %s\n", id, ERROROFFSET - timeout, note);
+			printf("recv timeout id=%d %ld usec\n", id, timediff(&current, &q->sent));
+		break;
+	case SENDERROR:
+		countsenderror++;
+		break;
+	case RECVERROR:
+		countrecverror++;
+		break;
+	default:
+		if (timeout >= 0) {
+			p = q->recvbuf;
+			NS_GET16(size, p);
+			response_size_sum += size;
+			response_size_sum2 += size * size;
+			if (response_size_min == 0 || response_size_min > size)
+				response_size_min = size;
+			if (response_size_max == 0 || response_size_max < size)
+				response_size_max = size;
+			rcode = p[3] & 0x0f;
+			countrcode[rcode]++;
+			countanswers++;
+			if (verbose)
+				printf("recv response id=%d rcode=%d size=%d rtt=%d\n", id, rcode, size, timeout);
+		}
+		break;
 	}
 #ifdef DEBUG
 	printf("%ld.%03ld no=%d fd=%d %d %s\n", q->sent.tv_sec, q->sent.tv_usec/1000, q->no, q->fd, timeout, note); */
@@ -273,16 +293,23 @@ void output()
 
 	et = ((double)timediff(&current, &start))/1000000.0;
 
+	counterror = countzeroread + countsocketerror + countsenderror + countrecverror + counttimeout;
 	printf("elapsed time: %.3f\n", et);
 	printf("tcp qps: %.3f\n", (double)countanswers/et);
-	printf("sent: %lld\n", countqueries);
-	printf("answer: %lld  %3.1f%%\n", countanswers,
+	printf("sent: %ld\n", countqueries);
+	printf("answer: %lu  %3.1f%%\n", countanswers,
 		 (double)((double)countanswers/(double)countqueries*100.0));
-	printf("error: %lld  %3.1f%%\n", counterror,
+	printf("error: %ld  %3.1f%%\n", counterror,
 		 (double)((double)counterror/(double)countqueries*100.0));
-	printf("zeroread: %lld  %3.1f%%\n", countzeroread,
+	printf("zeroread: %ld  %3.1f%%\n", countzeroread,
 		 (double)((double)countzeroread/(double)countqueries*100.0));
-	printf("timeout: %lld  %3.1f%%\n", counttimeout,
+	printf("socketerror: %ld  %3.1f%%\n", countsocketerror,
+		 (double)((double)countsocketerror/(double)countqueries*100.0));
+	printf("senderror: %ld  %3.1f%%\n", countsenderror,
+		 (double)((double)countsenderror/(double)countqueries*100.0));
+	printf("recverror: %ld  %3.1f%%\n", countrecverror,
+		 (double)((double)countrecverror/(double)countqueries*100.0));
+	printf("timeout: %ld  %3.1f%%\n", counttimeout,
 		 (double)((double)counttimeout/(double)countqueries*100.0));
 	response_size_average = (double)response_size_sum/countanswers;
 	response_size_variance = (double)response_size_sum2 / countanswers
@@ -292,7 +319,12 @@ void output()
 		int i;
 		for (i = 0; i < 16; i++) {
 			if (countrcode[i] != 0) {
-				printf("%s %lld %5.1f\n", rcodestr[i], countrcode[i], ((double)countrcode[i])/((double)countanswers)*100.0);
+				printf("%s %lu %5.1f\n", rcodestr[i], countrcode[i], ((double)countrcode[i])/((double)countanswers)*100.0);
+			}
+		}
+		for (i = 0; i < 100; i++) {
+			if (counterrno[i] != 0) {
+				printf("errno %d %lu %5.1f\n", i, counterrno[i], ((double)counterrno[i])/((double)countqueries)*100.0);
 			}
 		}
 	}
@@ -326,12 +358,12 @@ printf("tcp_send no=%d fd=%d %d:%d:%d\n", q->no, q->fd, len, q->wpos, q->sendlen
 printf("tcp_send no=%d fd=%d ENOTCONN return\n", q->no, q->fd);
 			return;
 		}
-		register_response(q, ERROROFFSET - errno, "tcp_send");
+		register_response(q, SENDERROR, "tcp_send");
 		tcp_close(q);
 		return;
 	}
 	if (len != q->sendlen) {
-		register_response(q, ERROROFFSET - errno, "tcp_send:sendto");
+		register_response(q, SENDERROR, "tcp_send:sendto");
 		tcp_close(q);
 		return;
 	}
@@ -402,6 +434,7 @@ void send_query(struct queries *q)
 	int qclass;
 	int qtype;
 	int tmp;
+	struct dnsheader *h;
 	struct typecodes *t = typecodes;
 	u_char buff[512];
 	static char sep[] = "\n\t ";
@@ -415,12 +448,12 @@ void send_query(struct queries *q)
 		tcp_close(q);
 	}
 	if (fp == NULL) {
-		qname = "version.bind";
+		qname = (u_char *)"version.bind";
 		qclass = ns_c_chaos;
 		qtype = ns_t_txt;
 	} else {
 		do {
-			if (fgets(buff, sizeof buff, fp) == NULL) {
+			if (fgets((char *)buff, sizeof buff, fp) == NULL) {
 				if (datafileloop == 1) {
 					finished = 1;
 					fclose(fp);
@@ -431,16 +464,16 @@ void send_query(struct queries *q)
 					datafileloop--;
 				rewind(fp);
 				lineno = 0;
-				if (fgets(buff, sizeof buff, fp) == NULL)
+				if (fgets((char *)buff, sizeof buff, fp) == NULL)
 					err(1, "cannot rewind input file");
 			}
 			lineno++;
 		} while(buff[0] == '#');
-		qname = strtok(buff, sep);
-		p = strtok(NULL, sep);
+		qname = (u_char *)strtok((char *)buff, sep);
+		p = (u_char *)strtok(NULL, sep);
 		if (p != NULL) {
 			while(t->name != NULL) {
-				if (!strcasecmp(t->name, p))
+				if (!strcasecmp(t->name, (char *)p))
 					break;
 				t++;
 			}
@@ -452,26 +485,27 @@ void send_query(struct queries *q)
 			err(1, "datafile format error at line %d, qname=%s qtype=%d", lineno, qname, qtype);
 		qclass = ns_c_in;
 	}
-	q->send.u.h.id = counter++;
-	q->send.u.h.flag1 = recursion ? 1 : 0; /* Query,OP=0,AA=0,TC=0,RD=0/1 */
-	q->send.u.h.flag2 = 0;
-	q->send.u.h.qdcount = htons(1);
-	q->send.u.h.ancount = 0;
-	q->send.u.h.nscount = 0;
-	q->send.u.h.arcount = 0;
-	p = q->send.u.dnsdata + sizeof(q->send.u.h);
-	lim = p + sizeof(q->send.u.dnsdata);
+	h = (struct dnsheader *)&q->send.dnsdata;
+	h->id = counter++;
+	h->flag1 = recursion ? 1 : 0; /* Query,OP=0,AA=0,TC=0,RD=0/1 */
+	h->flag2 = 0;
+	h->qdcount = htons(1);
+	h->ancount = 0;
+	h->nscount = 0;
+	h->arcount = 0;
+	p = (u_char *)h + sizeof(struct dnsheader);
+	lim = (u_char *)h + sizeof(q->send.dnsdata);
 	if ((tmp = stringtodname(qname, p, lim)) < 0)
-		send_query_error(qname);
+		send_query_error((char *)qname);
 	p += tmp;
 	*(unsigned short *)p = htons(qtype);
 	p += sizeof(unsigned short);
 	*(unsigned short *)p = htons(qclass);
 	p += sizeof(unsigned short);
-	q->sendlen = p - q->send.u.dnsdata;
+	q->sendlen = p - q->send.dnsdata;
 	if (EDNS0) {
 #define EDNS0size 11
-		if (q->sendlen + EDNS0size >= sizeof(q->send.u.dnsdata))
+		if (q->sendlen + EDNS0size >= sizeof(q->send.dnsdata))
 			send_query_error("ENDS0");
 		*p++ = 0; /* . */
 		*(unsigned short *)p = htons(ns_t_opt);
@@ -485,8 +519,8 @@ void send_query(struct queries *q)
 		*p++ = 0;
 		*p++ = 0;
 		q->sendlen += EDNS0size;
-		p = &q->send.u.dnsdata;
-		q->send.u.h.arcount = htons(1);
+		p = (u_char *)&q->send.dnsdata;
+		h->arcount = htons(1);
 	}
 	q->send.len = htons(q->sendlen);
 	q->sendlen += sizeof(q->send.len);
@@ -494,7 +528,7 @@ void send_query(struct queries *q)
 	q->rpos = 0;
 	q->sent = current;
 	if (verbose > 0) {
-		int id = ntohs(*(unsigned short *)&q->send.u.dnsdata);
+		int id = ntohs(*(unsigned short *)&q->send.dnsdata);
 		printf("sending query(%s,%d,%d) id=%d %d bytes to %s\n", qname, qclass, qtype, id, q->sendlen, ServerName);
 	}
 	if (q->fd > 0)
@@ -503,7 +537,7 @@ void send_query(struct queries *q)
 		|| (tmp = fcntl(q->fd, F_GETFL, 0)) == -1
 	    || fcntl(q->fd, F_SETFL, O_NONBLOCK | tmp) == -1
 	    || (connect(q->fd, (struct sockaddr *)&remote, remote_len) < 0 && errno != EINPROGRESS)) { 
-		register_response(q, ERROROFFSET - errno, "send_query:socket+fcntl+connect");
+		register_response(q, SOCKETERROR, "send_query:socket+fcntl+connect");
 		tcp_close(q);
 		return;
 	}
@@ -578,12 +612,12 @@ void tcp_receive(struct queries *q)
 	if (len < 0) {
 		if (errno == EAGAIN)
 			return;
-		register_response(q, ERROROFFSET - errno, "tcp_receive:read");
+		register_response(q, RECVERROR, "tcp_receive:read");
 		tcp_close(q);
 		return;
 	}
 	if (len == 0) {
-		register_response(q, ERRZEROREAD, "tcp_receive:read");
+		register_response(q, RECVERROR, "tcp_receive:read");
 		tcp_close(q);
 		return;
 	}
@@ -594,7 +628,7 @@ void tcp_receive(struct queries *q)
 	if (q->rpos >= len2 + 2) {
 		/* finished */
 		recvp = q->recvbuf + 2;
-		if (memcmp(recvp, q->send.u.dnsdata, 2) == 0) {
+		if (memcmp(recvp, &q->send.dnsdata, 2) == 0) {
 			if ((recvp[2] & 1) == 0 /* RA bit */
 			  || (recvp[3] & 15) != 0 /* RCODE must be 0 */
 			) {
