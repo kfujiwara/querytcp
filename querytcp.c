@@ -159,8 +159,7 @@ struct queries {
 	} send;
 	u_char recvbuf[RECVBUFSIZ];
 	int sendlen;
-	int sent_flag;
-	int tcpstate;
+	int state;
 	int fd;
 	int rpos;
 	int wpos;
@@ -172,9 +171,9 @@ struct queries *Queries;
 
 #define	NQUERY 16384
 
-#define	TCP_NONE	0
-#define	TCP_WRITABLE	1
-#define	TCP_READABLE	2
+#define	State_None	0
+#define	State_WaitForSend	1
+#define	State_WaitForRecv	2
 
 /* input */
 char *ServerName = "127.0.0.1";
@@ -340,8 +339,7 @@ printf("tcp_close no=%d fd=%d\n", q->no, q->fd);
 		FD_CLR(q->fd, &fdset0r);
 		FD_CLR(q->fd, &fdset0w);
 	}
-	q->sent_flag = 0;
-	q->tcpstate = TCP_NONE;
+	q->state = State_None;
 	q->fd = -1;
 }
 
@@ -443,7 +441,7 @@ void send_query(struct queries *q)
 	/*
 		SEND E[send_packet_pos]
 	 */
-	if (q->sent_flag) {
+	if (q->state != State_None) {
 		register_response(q, TIMEOUTERROR, "send_query");
 		tcp_close(q);
 	}
@@ -544,14 +542,13 @@ void send_query(struct queries *q)
 #ifdef DEBUG
 printf("send_query no=%d fd=%d socket|connect\n", q->no, q->fd);
 #endif
-	q->tcpstate = TCP_WRITABLE;
+	q->state = State_WaitForSend;
 	FD_SET(q->fd, &fdset0w);
 	FD_CLR(q->fd, &fdset0r);
 	if (nfds <= q->fd) {
 		nfds = q->fd + 1;
 	}
 	q->sent = current;
-	q->sent_flag = 1;
 }
 
 int UpdateQuery()
@@ -569,7 +566,7 @@ int UpdateQuery()
 	}
 	for(i = 0; i < nQueries; i++) {
 		q = &Queries[i];
-		if (q->sent_flag) {
+		if (q->state != State_None) {
 			if ((t = timediff(&current, &q->sent)) > Timeout) {
 				/* timeouted */
 				register_response(q, TIMEOUTERROR, "UpdateQuery");
@@ -577,8 +574,7 @@ int UpdateQuery()
 			} else
 			if (t < min)
 				min = t;
-		}
-		if (!q->sent_flag) {
+		} else {
 			if (!finished)
 				send_query(q);
 			else
@@ -680,7 +676,7 @@ void query()
 	_res.options |= RES_AAONLY;
 
 	for (i = 0; i < nQueries; i++) {
-		Queries[i].sent_flag = 0;
+		Queries[i].state = State_None;
 		Queries[i].no = i;
 	}
 
@@ -703,7 +699,7 @@ void query()
 		UpdateCurrentTime;
 		for(i = 0; i < nQueries; i++) {
 			q = &Queries[i];
-			if (q->fd < 0 || !q->sent_flag)
+			if (q->fd < 0 || q->state == State_None)
 				continue;
 			if (FD_ISSET(q->fd, &fdsetw)) {
 				tcp_send(q);
