@@ -11,12 +11,12 @@ This program measures DNS server performance of TCP query.
 
 o Running environment:
 	Development environment:
-		FreeBSD
-		MacOS X 10.3.4
+		FreeBSD, Linux
+		#MacOS X 10.3.4
 
 o How to make:
-    FreeBSD: gcc -Wall -O2 -g -lm -o querytcp querytcp.c
-    MacOS X: gcc -Wall -O2 -g -lm -lresolv -o querytcp querytcp.c
+    FreeBSD, Linux: cc -Wall -O2 -g -lm -o querytcp querytcp.c
+    #MacOS X: cc -Wall -O2 -g -lm -lresolv -o querytcp querytcp.c
 
 o changes
 
