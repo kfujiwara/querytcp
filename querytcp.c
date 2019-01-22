@@ -540,7 +540,7 @@ void send_query(struct queries *q)
 	q->rpos = 0;
 	q->sent = current;
 	if (verbose > 0) {
-		int id = ntohs(*(unsigned short *)&q->send.dnsdata);
+		int id = (q->send.dnsdata[0] << 8) | q->send.dnsdata[1];
 		printf("sending query(%s,%d,%d) id=%d %d bytes to %s\n", qname, qclass, qtype, id, q->sendlen, ServerName);
 	}
 	if (q->fd > 0 && reuse_session == 0)
@@ -638,7 +638,7 @@ void tcp_receive(struct queries *q)
 	q->rpos += len;
 	if (q->rpos < 2)
 		return;
-	len2 = ntohs(*(unsigned short *)(q->recvbuf));
+	len2 = (q->recvbuf[0] << 8) || q->recvbuf[1];
 	if (q->rpos >= len2 + 2) {
 		/* finished */
 		recvp = q->recvbuf + 2;
@@ -660,7 +660,7 @@ void tcp_receive(struct queries *q)
 			}
 			return;
 		} else {
-printf("no=%d fd=%d unknown recv %d bytes, len=%d\n", q->no, q->fd, q->rpos, ntohs(*(unsigned short *)(q->recvbuf)));
+printf("no=%d fd=%d unknown recv %d bytes, len=%d\n", q->no, q->fd, q->rpos, (q->recvbuf[0] << 8)|q->recvbuf[1]);
 			hexdump("", q->recvbuf, len);
 			/*
 			fprintf(stderr, "unknown recv from %s, %d bytes %02x %02x\n", q->nameserverlabel, q->rpos, recvp[0], recvp[1]);
