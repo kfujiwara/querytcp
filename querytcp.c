@@ -175,16 +175,24 @@ struct queries *Queries;
 #define	State_WaitForSend	1
 #define	State_WaitForRecv	2
 
+#define DATA_VERSION  0
+#define DATA_RANDOM   1
+#define DATA_FROMFILE 2
+#define DATA_FROMSTDIN 3
+
 /* input */
 char *ServerName = "127.0.0.1";
 char *ServerPort = "domain";
 int family = PF_UNSPEC;
+int data_mode = DATA_VERSION;
 char *datafile = NULL;
+FILE *data_fp = NULL;
+char *basedom = NULL;
+
 int TimeLimit = 20;
 int EDNS0 = 0;
 int DNSSEC = 0;
 int recursion = 0;
-FILE *fp = NULL;
 int datafileloop = 0;
 int verbose = 0;
 int nQueries = 120;
@@ -403,12 +411,12 @@ struct typecodes {
 	{ NULL, -1 },
 };
 
-int stringtodname(unsigned char *qname, unsigned char *buff, unsigned char *lim)
+int stringtodname(char *qname, u_char *buff, u_char *lim)
 {
-	unsigned char *p, *s, *t;
+	u_char *p, *s, *t;
 	int count, total;
 
-	t = qname;
+	t = (u_char *)qname;
 	p = buff;
 	total = 0;
 	for ( ;; ) {
@@ -442,15 +450,20 @@ void send_query_error(char *mesg)
 void send_query(struct queries *q)
 {
 	u_char *p, *lim;
-	u_char *qname;
+	char *qname;
 	int qclass;
 	int qtype;
 	int tmp;
+	char c1;
+	char c2;
+	char c3;
+	u_int64_t r;
 	struct dnsheader *h;
 	struct typecodes *t = typecodes;
 	u_char buff[512];
 	static char sep[] = "\n\t ";
 	static int lineno = 0;
+	char qnamebuf[257];
 
 	/*
 		SEND E[send_packet_pos]
@@ -459,29 +472,47 @@ void send_query(struct queries *q)
 		register_response(q, TIMEOUTERROR, "send_query");
 		tcp_close(q);
 	}
-	if (fp == NULL) {
-		qname = (u_char *)"version.bind";
+	switch(data_mode) {
+	default:
+	case DATA_VERSION:
+		qname = "version.bind";
 		qclass = ns_c_chaos;
 		qtype = ns_t_txt;
-	} else {
+		break;
+	case DATA_RANDOM:
+		r = random();
+		qclass = ns_c_in;
+		qtype = (r & 1) ? ns_t_a : ns_t_aaaa;
+		r = r / 2;
+		c1 = 'a' + r % 26;
+		r = r / 26;
+		c2 = 'a' + r % 26;
+		r = r / 26;
+		c3 = 'a' + r % 26;
+		r = r / 26;
+		snprintf(qnamebuf, sizeof qnamebuf, "%c%c%c%lu.%s", c1, c2, c3, r, basedom);
+		qname = qnamebuf;
+		break;
+	case DATA_FROMSTDIN:
+	case DATA_FROMFILE:
 		do {
-			if (fgets((char *)buff, sizeof buff, fp) == NULL) {
-				if (datafileloop == 1) {
+			if (fgets((char *)buff, sizeof buff, data_fp) == NULL) {
+				if (datafileloop == 1 || data_mode == DATA_FROMSTDIN) {
 					finished = 1;
-					fclose(fp);
-					fp = NULL;
+					fclose(data_fp);
+					data_fp = NULL;
 					return;
 				}
 				if (datafileloop > 0)
 					datafileloop--;
-				rewind(fp);
+				rewind(data_fp);
 				lineno = 0;
-				if (fgets((char *)buff, sizeof buff, fp) == NULL)
+				if (fgets((char *)buff, sizeof buff, data_fp) == NULL)
 					err(1, "cannot rewind input file");
 			}
 			lineno++;
 		} while(buff[0] == '#');
-		qname = (u_char *)strtok((char *)buff, sep);
+		qname = strtok((char *)buff, sep);
 		p = (u_char *)strtok(NULL, sep);
 		if (p != NULL) {
 			while(t->name != NULL) {
@@ -496,6 +527,7 @@ void send_query(struct queries *q)
 		if (qname == NULL || qtype < 0)
 			err(1, "datafile format error at line %d, qname=%s qtype=%d", lineno, qname, qtype);
 		qclass = ns_c_in;
+		break;
 	}
 	h = (struct dnsheader *)&q->send.dnsdata;
 	h->id = counter++;
@@ -508,7 +540,7 @@ void send_query(struct queries *q)
 	p = (u_char *)h + sizeof(struct dnsheader);
 	lim = (u_char *)h + sizeof(q->send.dnsdata);
 	if ((tmp = stringtodname(qname, p, lim)) < 0)
-		send_query_error((char *)qname);
+		send_query_error(qname);
 	p += tmp;
 	*(unsigned short *)p = htons(qtype);
 	p += sizeof(unsigned short);
@@ -737,21 +769,21 @@ void usage()
 {
 	fprintf(stderr, 
 "querytcp [-d datafile] [-s server_addr] [-p port] [-q num_queries] [-t timeout] [l limit] [-4] [-6] [-h]\n"
-"  -d specifies the input data file (default: stdin)\n"
-"  -s sets the server to query (default: 127.0.0.1)\n"
-"  -p sets the port on which to query the server (default: 53)\n"
-"  -q specifies the maximum number of queries outstanding (default: 120)\n"
-"  -t specifies the timeout for query completion in seconds (default: 10)\n"
-"  -l specifies how a limit for how long to run tests in seconds (no default)\n"
+"  -s IPaddr : sets the server to query [127.0.0.1]\n"
+"  -p port   : sets the port on which to query the server (default: 53)\n"
+"  -q num    : specifies the maximum number of queries outstanding [120]\n"
+"  -t timeout: specifies the timeout for query completion in seconds [10]\n"
+"  -l howlong: specifies how a limit for how long to run tests in seconds (no default)\n"
 "  -e enable EDNS0\n"
 "  -D set DO bit\n"
-"  -r set RD bit\n"
-"  -R Reuse TCP session\n"
+"  -R set RD bit\n"
+"  -u Reuse TCP session\n"
 "\n"
+"  Query data (Qname, Qtype) from:\n"
+"     -d file : input data file / - means from stdin\n"
+"     -r name : {random}.name A/AAAA queries\n"
+"     -H      : hostname.bind CH TXT\n"
 "\n"
-"\n"
-"  -c print the number of packets with each rcode\n"
-"  -v verbose: report the RCODE of each response on stdout\n"
 "  -h print this usage\n"
 );
 	exit(1);
@@ -761,7 +793,7 @@ int main(int argc, char *argv[])
 {
 	int ch, i;
 
-	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46eDrvhR")) != -1) {
+	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46euDvhHRhr:")) != -1) {
 	switch (ch) {
 	case 'q':
 		nQueries = atoi(optarg);
@@ -776,8 +808,21 @@ int main(int argc, char *argv[])
 		break;
 	case 'd':
 		datafile = Xstrdup(optarg);
-		if ((fp = fopen(datafile, "r")) == NULL)
-			err(1, "cannot open %s", optarg);
+		if (strcmp(datafile, "-")) {
+			data_mode = DATA_FROMSTDIN;
+			data_fp = stdin;
+		} else {
+			data_mode = DATA_FROMFILE;
+			if ((data_fp = fopen(datafile, "r")) == NULL)
+				err(1, "cannot open %s", optarg);
+		}
+		break;
+	case 'r':
+		basedom = Xstrdup(optarg);
+		data_mode = DATA_RANDOM;
+		break;
+	case 'H':
+		data_mode = DATA_VERSION;
 		break;
 	case 't':
 		i = atoi(optarg);
@@ -800,7 +845,7 @@ int main(int argc, char *argv[])
 	case 'D':
 		DNSSEC = 1;
 		break;
-	case 'r':
+	case 'R':
 		recursion = 1;
 		break;
 	case 'v':
@@ -809,7 +854,7 @@ int main(int argc, char *argv[])
 	case 'c':
 		printrcode = 1;
 		break;
-	case 'R':
+	case 'u':
 		reuse_session = 1;
 		break;
 	case 'h':
