@@ -768,7 +768,7 @@ void query()
 void usage()
 {
 	fprintf(stderr, 
-"querytcp {-d datafile|-r domainname|-H} [-s server_addr] [-p port] [-q num_queries] [-t timeout] [l limit] [-4] [-6] [-h]\n"
+"querytcp {-d datafile|-r domainname|-V} [-s server_addr] [-p port] [-q num_queries] [-t timeout] [l limit] [-4] [-6] [-h]\n"
 "  -s IPaddr : sets the server to query [127.0.0.1]\n"
 "  -p port   : sets the port on which to query the server [53]\n"
 "  -q num    : specifies the maximum number of queries outstanding [120]\n"
@@ -782,7 +782,7 @@ void usage()
 "  Query data (Qname, Qtype) from:\n"
 "     -d file : input data file / - means from stdin\n"
 "     -r name : {random}.name A/AAAA queries\n"
-"     -H      : hostname.bind CH TXT\n"
+"     -V      : version.bind CH TXT\n"
 "\n"
 "  -h print this usage\n"
 );
@@ -793,7 +793,7 @@ int main(int argc, char *argv[])
 {
 	int ch, i;
 
-	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46euDvhHRhr:")) != -1) {
+	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46euDvhVRhr:")) != -1) {
 	switch (ch) {
 	case 'q':
 		nQueries = atoi(optarg);
@@ -821,7 +821,8 @@ int main(int argc, char *argv[])
 		basedom = Xstrdup(optarg);
 		data_mode = DATA_RANDOM;
 		break;
-	case 'H':
+	case 'V':
+		srandom(time(NULL));
 		data_mode = DATA_VERSION;
 		break;
 	case 't':
