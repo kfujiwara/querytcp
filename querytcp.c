@@ -768,9 +768,9 @@ void query()
 void usage()
 {
 	fprintf(stderr, 
-"querytcp [-d datafile] [-s server_addr] [-p port] [-q num_queries] [-t timeout] [l limit] [-4] [-6] [-h]\n"
+"querytcp {-d datafile|-r domainname|-H} [-s server_addr] [-p port] [-q num_queries] [-t timeout] [l limit] [-4] [-6] [-h]\n"
 "  -s IPaddr : sets the server to query [127.0.0.1]\n"
-"  -p port   : sets the port on which to query the server (default: 53)\n"
+"  -p port   : sets the port on which to query the server [53]\n"
 "  -q num    : specifies the maximum number of queries outstanding [120]\n"
 "  -t timeout: specifies the timeout for query completion in seconds [10]\n"
 "  -l howlong: specifies how a limit for how long to run tests in seconds (no default)\n"
