@@ -180,14 +180,29 @@ struct queries *Queries;
 #define DATA_FROMFILE 2
 #define DATA_FROMSTDIN 3
 
+char *data_mode_str[] = {
+	"version.bind CH TXT",
+	"RandomSubdomain ",
+	"From Stdin",
+	"From File="
+};
+char *data_mode_str2[] = {
+	"",
+	"",
+	"",
+	""
+};
+
 /* input */
 char *ServerName = "127.0.0.1";
 char *ServerPort = "domain";
+
 int family = PF_UNSPEC;
 int data_mode = DATA_VERSION;
 char *datafile = NULL;
 FILE *data_fp = NULL;
 char *basedom = NULL;
+
 
 int TimeLimit = 20;
 int EDNS0 = 0;
@@ -198,6 +213,11 @@ int verbose = 0;
 int nQueries = 120;
 int printrcode = 1;
 int reuse_session = 0;
+
+char ServerAddr[64] = "";
+int ServerPortno = 53;
+
+
 char *rcodestr[]= {
 	"NOERROR", "FormatError", "ServerFailure", "NameError",
 	"NotImplemented", "Reused", "RCODE06", "RCODE07",
@@ -547,7 +567,7 @@ void send_query(struct queries *q)
 	*(unsigned short *)p = htons(qclass);
 	p += sizeof(unsigned short);
 	q->sendlen = p - q->send.dnsdata;
-	if (EDNS0) {
+	if (EDNS0 || DNSSEC) {
 #define EDNS0size 11
 		if (q->sendlen + EDNS0size >= sizeof(q->send.dnsdata))
 			send_query_error("ENDS0");
@@ -709,25 +729,9 @@ void query()
 	int min;
 	struct queries *q;
 	int i, n;
-	struct addrinfo hints, *res0;
-	int error;
 
 	Queries = Xmalloc(sizeof(Queries[0]) * nQueries);
-	memset(&remote, 0, sizeof(remote));
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = family;
-	hints.ai_socktype = SOCK_STREAM;
-	error = getaddrinfo(ServerName, ServerPort, &hints, &res0);
-	if (error) {
-		errx(1, "%s", gai_strerror(error));
-	}
-	memcpy(&remote, res0->ai_addr, res0->ai_addrlen);
-	remote_len = res0->ai_addrlen;
 	memset(&countrcode, 0, sizeof(countrcode));
-
-	res_init();
-	_res.options ^= ~RES_RECURSE;
-	_res.options |= RES_AAONLY;
 
 	for (i = 0; i < nQueries; i++) {
 		Queries[i].state = State_None;
@@ -792,6 +796,8 @@ void usage()
 int main(int argc, char *argv[])
 {
 	int ch, i;
+	struct addrinfo hints, *res0;
+	int error;
 
 	while ((ch = getopt(argc, argv, "d:s:p:q:t:l:46euDvhVRhr:")) != -1) {
 	switch (ch) {
@@ -818,11 +824,11 @@ int main(int argc, char *argv[])
 		}
 		break;
 	case 'r':
+		srandom(time(NULL));
 		basedom = Xstrdup(optarg);
 		data_mode = DATA_RANDOM;
 		break;
 	case 'V':
-		srandom(time(NULL));
 		data_mode = DATA_VERSION;
 		break;
 	case 't':
@@ -865,6 +871,32 @@ int main(int argc, char *argv[])
 	}
 	argc -= optind;
 	argv += optind;
+
+	memset(&remote, 0, sizeof(remote));
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = family;
+	hints.ai_socktype = SOCK_STREAM;
+	error = getaddrinfo(ServerName, ServerPort, &hints, &res0);
+	if (error) {
+		errx(1, "getaddrinfo(%s %s): %s", ServerName, ServerPort, gai_strerror(error));
+	}
+	remote_len = res0->ai_addrlen;
+	memcpy(&remote, res0->ai_addr, remote_len);
+	ServerPortno = ntohs( remote.ss_family == AF_INET ? ((struct sockaddr_in *)&remote)->sin_port : ((struct sockaddr_in6 *)&remote)->sin6_port );
+
+	data_mode_str2[DATA_RANDOM] = basedom;
+	data_mode_str2[DATA_FROMFILE] = datafile;
+
+	printf("Doing querytcp from %s%s to %s:%d Parallel=%d TimeLimit=%d Timeout=%f EDNS0=%d DO=%d RD=%d Reuse=%d\n",
+		data_mode_str[data_mode], data_mode_str2[data_mode],
+		ServerName, ServerPortno,
+		nQueries, TimeLimit, ((double)Timeout)/1000000,
+		EDNS0, DNSSEC, recursion, reuse_session);
+
+	error = getnameinfo((struct sockaddr *)&remote, remote_len, ServerAddr, sizeof ServerAddr, NULL, 0, NI_NUMERICHOST);
+	if (error) {
+		errx(1, "getnameinfo: %s", gai_strerror(error));
+	}
 
 	query();
 	output();
